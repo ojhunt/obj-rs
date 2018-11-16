@@ -147,20 +147,18 @@ impl FromRawVertex for Vertex {
 
             for polygon in polygons {
                 match polygon {
-                    Polygon::P(ref vec) if vec.len() == 3 => {
+                    Polygon::P(ref vec) => {
+                        assert!(vec.len() == 3);
                         for &pi in vec {
                             map(pi, None)
                         }
                     }
-                    Polygon::PT(ref vec) if vec.len() == 3 => {
+                    Polygon::PT(ref vec) => {
+                        assert!(vec.len() == 3);
                         for &(pi, _) in vec {
                             map(pi, None)
                         }
                     }
-                    Polygon::P(_) | Polygon::PT(_) => error!(
-                        InsufficientData,
-                        "Tried to extract normal data which are not contained in the model"
-                    ),
                     Polygon::PN(ref vec) if vec.len() == 3 => {
                         for &(pi, ni) in vec {
                             map(pi, Some(ni))
