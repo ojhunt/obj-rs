@@ -101,7 +101,7 @@ pub struct Vertex {
     /// Position vector of a vertex.
     pub position: [f32; 3],
     /// Normal vertor of a vertex.
-    pub normal: [f32; 3],
+    pub normal: Option<[f32; 3]>,
 }
 
 #[cfg(feature = "glium-support")]
@@ -117,16 +117,21 @@ impl FromRawVertex for Vertex {
         let mut ib = Vec::with_capacity(polygons.len() * 3);
         {
             let mut cache = HashMap::new();
-            let mut map = |pi: usize, ni: usize| {
+            let mut map = |pi: usize, ni: Option<usize>| {
                 // Look up cache
                 let index = match cache.entry((pi, ni)) {
                     // Cache miss -> make new, store it on cache
                     Entry::Vacant(entry) => {
                         let p = positions[pi];
-                        let n = normals[ni];
+                        let n = if let Some(n) = ni {
+                            let nv = normals[n];
+                            Some([nv.0, nv.1, nv.2])
+                        } else {
+                            None
+                        };
                         let vertex = Vertex {
                             position: [p.0, p.1, p.2],
-                            normal: [n.0, n.1, n.2],
+                            normal: n,
                         };
 
                         let index = IndexType::from(vb.len());
@@ -142,18 +147,28 @@ impl FromRawVertex for Vertex {
 
             for polygon in polygons {
                 match polygon {
+                    Polygon::P(ref vec) if vec.len() == 3 => {
+                        for &pi in vec {
+                            map(pi, None)
+                        }
+                    }
+                    Polygon::PT(ref vec) if vec.len() == 3 => {
+                        for &(pi, _) in vec {
+                            map(pi, None)
+                        }
+                    }
                     Polygon::P(_) | Polygon::PT(_) => error!(
                         InsufficientData,
                         "Tried to extract normal data which are not contained in the model"
                     ),
                     Polygon::PN(ref vec) if vec.len() == 3 => {
                         for &(pi, ni) in vec {
-                            map(pi, ni)
+                            map(pi, Some(ni))
                         }
                     }
                     Polygon::PTN(ref vec) if vec.len() == 3 => {
                         for &(pi, _, ni) in vec {
-                            map(pi, ni)
+                            map(pi, Some(ni))
                         }
                     }
                     _ => error!(
