@@ -32,53 +32,67 @@ dome.indices;
 
 #![deny(missing_docs)]
 
-#[cfg(feature = "glium-support")] #[macro_use] extern crate glium;
+#[cfg(feature = "glium-support")]
+#[macro_use]
+extern crate glium;
 extern crate vec_map;
 
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 
-#[macro_use] mod error;
+#[macro_use]
+mod error;
 pub mod raw;
 
-use std::io::BufRead;
-use std::collections::hash_map::{HashMap, Entry};
+pub use error::{LoadError, LoadErrorKind, ObjError, ObjResult};
 use raw::object::Polygon;
-pub use error::{ObjResult, ObjError, LoadError, LoadErrorKind};
+use std::collections::hash_map::{Entry, HashMap};
+use std::io::BufRead;
 
 /// Load a wavefront OBJ file into Rust & OpenGL friendly format.
-pub fn load_obj<V: FromRawVertex, T: BufRead>(input: T) -> ObjResult<Obj<V>> {
+pub fn load_obj<V: FromRawVertex, IndexType: From<usize> + Clone + Copy, T: BufRead>(
+    input: T,
+) -> ObjResult<Obj<V, IndexType>> {
     let raw = try!(raw::parse_obj(input));
     Obj::new(raw)
 }
 
 /// 3D model object loaded from wavefront OBJ.
 #[derive(Serialize, Deserialize)]
-pub struct Obj<V = Vertex> {
+pub struct Obj<V = Vertex, IndexType: From<usize> = usize> {
     /// Object's name.
     pub name: Option<String>,
     /// Vertex buffer.
     pub vertices: Vec<V>,
     /// Index buffer.
-    pub indices: Vec<u16>,
+    pub indices: Vec<IndexType>,
 }
 
-impl<V: FromRawVertex> Obj<V> {
+impl<V: FromRawVertex, IndexType: From<usize> + Clone + Copy> Obj<V, IndexType> {
     /// Create `Obj` from `RawObj` object.
     pub fn new(raw: raw::RawObj) -> ObjResult<Self> {
-        let (vertices, indices) = try!(FromRawVertex::process(raw.positions, raw.normals, raw.polygons));
+        let (vertices, indices) = try!(FromRawVertex::process(
+            raw.positions,
+            raw.normals,
+            raw.polygons
+        ));
 
         Ok(Obj {
             name: raw.name,
             vertices: vertices,
-            indices: indices
+            indices: indices,
         })
     }
 }
 
 /// Conversion from `RawObj`'s raw data.
-pub trait FromRawVertex : Sized {
+pub trait FromRawVertex: Sized {
     /// Build vertex and index buffer from raw object data.
-    fn process(vertices: Vec<(f32, f32, f32, f32)>, normals: Vec<(f32, f32, f32)>, polygons: Vec<Polygon>) -> ObjResult<(Vec<Self>, Vec<u16>)>;
+    fn process<IndexType: From<usize> + Clone + Copy>(
+        vertices: Vec<(f32, f32, f32, f32)>,
+        normals: Vec<(f32, f32, f32)>,
+        polygons: Vec<Polygon>,
+    ) -> ObjResult<(Vec<Self>, Vec<IndexType>)>;
 }
 
 /// Vertex data type of `Obj` which contains position and normal data of a vertex.
@@ -94,7 +108,11 @@ pub struct Vertex {
 implement_vertex!(Vertex, position, normal);
 
 impl FromRawVertex for Vertex {
-    fn process(positions: Vec<(f32, f32, f32, f32)>, normals: Vec<(f32, f32, f32)>, polygons: Vec<Polygon>) -> ObjResult<(Vec<Self>, Vec<u16>)> {
+    fn process<IndexType: From<usize> + Clone + Copy>(
+        positions: Vec<(f32, f32, f32, f32)>,
+        normals: Vec<(f32, f32, f32)>,
+        polygons: Vec<Polygon>,
+    ) -> ObjResult<(Vec<Self>, Vec<IndexType>)> {
         let mut vb = Vec::with_capacity(polygons.len() * 3);
         let mut ib = Vec::with_capacity(polygons.len() * 3);
         {
@@ -106,31 +124,42 @@ impl FromRawVertex for Vertex {
                     Entry::Vacant(entry) => {
                         let p = positions[pi];
                         let n = normals[ni];
-                        let vertex = Vertex { position: [p.0, p.1, p.2], normal: [n.0, n.1, n.2] };
+                        let vertex = Vertex {
+                            position: [p.0, p.1, p.2],
+                            normal: [n.0, n.1, n.2],
+                        };
 
-                        let index= vb.len() as u16;
+                        let index = IndexType::from(vb.len());
                         vb.push(vertex);
                         entry.insert(index);
                         index
                     }
                     // Cache hit -> use it
-                    Entry::Occupied(entry) => {
-                        *entry.get()
-                    }
+                    Entry::Occupied(entry) => *entry.get(),
                 };
                 ib.push(index)
             };
 
             for polygon in polygons {
                 match polygon {
-                    Polygon::P(_) | Polygon::PT(_) => error!(InsufficientData, "Tried to extract normal data which are not contained in the model"),
+                    Polygon::P(_) | Polygon::PT(_) => error!(
+                        InsufficientData,
+                        "Tried to extract normal data which are not contained in the model"
+                    ),
                     Polygon::PN(ref vec) if vec.len() == 3 => {
-                        for &(pi, ni) in vec { map(pi, ni) }
+                        for &(pi, ni) in vec {
+                            map(pi, ni)
+                        }
                     }
                     Polygon::PTN(ref vec) if vec.len() == 3 => {
-                        for &(pi, _, ni) in vec { map(pi, ni) }
+                        for &(pi, _, ni) in vec {
+                            map(pi, ni)
+                        }
                     }
-                    _ => error!(UntriangulatedModel, "Model should be triangulated first to be loaded properly")
+                    _ => error!(
+                        UntriangulatedModel,
+                        "Model should be triangulated first to be loaded properly"
+                    ),
                 }
             }
         }
@@ -143,31 +172,49 @@ impl FromRawVertex for Vertex {
 #[derive(Copy, PartialEq, Clone, Debug, Serialize, Deserialize)]
 pub struct Position {
     /// Position vector of a vertex.
-    pub position: [f32; 3]
+    pub position: [f32; 3],
 }
 
 #[cfg(feature = "glium-support")]
 implement_vertex!(Position, position);
 
 impl FromRawVertex for Position {
-    fn process(vertices: Vec<(f32, f32, f32, f32)>, _: Vec<(f32, f32, f32)>, polygons: Vec<Polygon>) -> ObjResult<(Vec<Self>, Vec<u16>)> {
-        let vb = vertices.into_iter().map(|v| Position { position: [v.0, v.1, v.2] }).collect();
-        let mut ib = Vec::with_capacity(polygons.len() * 3);
+    fn process<IndexType: From<usize> + Clone + Copy>(
+        vertices: Vec<(f32, f32, f32, f32)>,
+        _: Vec<(f32, f32, f32)>,
+        polygons: Vec<Polygon>,
+    ) -> ObjResult<(Vec<Self>, Vec<IndexType>)> {
+        let vb = vertices
+            .into_iter()
+            .map(|v| Position {
+                position: [v.0, v.1, v.2],
+            })
+            .collect();
+        let mut ib: Vec<IndexType> = Vec::with_capacity(polygons.len() * 3);
         {
-            let mut map = |pi: usize| { ib.push(pi as u16) };
+            let mut map = |pi: usize| ib.push(IndexType::from(pi));
 
             for polygon in polygons {
                 match polygon {
                     Polygon::P(ref vec) if vec.len() == 3 => {
-                        for &pi in vec { map(pi) }
+                        for &pi in vec {
+                            map(pi)
+                        }
                     }
                     Polygon::PT(ref vec) | Polygon::PN(ref vec) if vec.len() == 3 => {
-                        for &(pi, _) in vec { map(pi) }
+                        for &(pi, _) in vec {
+                            map(pi)
+                        }
                     }
                     Polygon::PTN(ref vec) if vec.len() == 3 => {
-                        for &(pi, _, _) in vec { map(pi) }
+                        for &(pi, _, _) in vec {
+                            map(pi)
+                        }
                     }
-                    _ => error!(UntriangulatedModel, "Model should be triangulated first to be loaded properly")
+                    _ => error!(
+                        UntriangulatedModel,
+                        "Model should be triangulated first to be loaded properly"
+                    ),
                 }
             }
         }
@@ -175,21 +222,26 @@ impl FromRawVertex for Position {
     }
 }
 
-
 #[cfg(feature = "glium-support")]
 mod glium_support {
-    use glium::{vertex, index, VertexBuffer, IndexBuffer};
-    use glium::backend::Facade;
     use super::Obj;
+    use glium::backend::Facade;
+    use glium::{index, vertex, IndexBuffer, VertexBuffer};
 
     impl<V: vertex::Vertex> Obj<V> {
         /// Retrieve glium-compatible vertex buffer from Obj
-        pub fn vertex_buffer<F: Facade>(&self, facade: &F) -> Result<VertexBuffer<V>, vertex::BufferCreationError> {
+        pub fn vertex_buffer<F: Facade>(
+            &self,
+            facade: &F,
+        ) -> Result<VertexBuffer<V>, vertex::BufferCreationError> {
             VertexBuffer::new(facade, &self.vertices)
         }
 
         /// Retrieve glium-compatible index buffer from Obj
-        pub fn index_buffer<F: Facade>(&self, facade: &F) -> Result<IndexBuffer<u16>, index::BufferCreationError> {
+        pub fn index_buffer<F: Facade, IndexType>(
+            &self,
+            facade: &F,
+        ) -> Result<IndexBuffer<IndexType>, index::BufferCreationError> {
             IndexBuffer::new(facade, index::PrimitiveType::TrianglesList, &self.indices)
         }
     }
